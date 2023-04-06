@@ -8,7 +8,8 @@ var request = require('supertest')
 var zlib = require('zlib')
 
 var compression = require('..')
-
+var hasBrotliSupport = 'createBrotliCompress' && 'createBrotliDecompress' in zlib
+var brotlit = hasBrotliSupport ? it : it.skip
 describe('compression()', function () {
   it('should skip HEAD', function (done) {
     var server = createServer({ threshold: 0 }, function (req, res) {
@@ -493,6 +494,133 @@ describe('compression()', function () {
     })
   })
 
+  describe('when "Accept-Encoding: br"', function () {
+    brotlit('should respond with br', function (done) {
+      var server = createServer({ threshold: 0 }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('hello, world')
+      })
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'br')
+        .expect('Content-Encoding', 'br', done)
+    })
+
+    brotlit('should return false writing after end', function (done) {
+      var server = createServer({ threshold: 0 }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('hello, world')
+        assert.ok(res.write() === false)
+        assert.ok(res.end() === false)
+      })
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'br')
+        .expect('Content-Encoding', 'br', done)
+    })
+  })
+  describe('when "Accept-Encoding: br, gzip, deflate"', function () {
+    brotlit('should respond with br', function (done) {
+      var server = createServer({ threshold: 0 }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('hello, world')
+      })
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'br, gzip, deflate')
+        .expect('Content-Encoding', 'br', done)
+    })
+  })
+
+  describe('when "Accept-Encoding: br, deflate, gzip"', function () {
+    brotlit('should respond with br', function (done) {
+      var server = createServer({ threshold: 0 }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('hello, world')
+      })
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'br, deflate, gzip')
+        .expect('Content-Encoding', 'br', done)
+    })
+  })
+  describe('when "Accept-Encoding: gzip, deflate, br"', function () {
+    brotlit('should respond with gzip', function (done) {
+      var server = createServer({ threshold: 0 }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('hello, world')
+      })
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'gzip, deflate, br')
+        .expect('Content-Encoding', 'gzip', done)
+    })
+  })
+  describe('when options.brotli.params is undefined', function () {
+    brotlit('should respond with no errors', function (done) {
+      var server = createServer({ threshold: 0 }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('hello, world')
+      })
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'br,')
+        .expect('Content-Encoding', 'br', done)
+    })
+  })
+  describe('when options.brotli.params is defined', function () {
+    brotlit('should respond with no errors', function (done) {
+      var server = createServer({ threshold: 0, brotli: { params: {} } }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('hello, world')
+      })
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'br,')
+        .expect('Content-Encoding', 'br', done)
+    })
+
+    brotlit('should not override BROTLI_PARAM_QUALITY when it is set', function (done) {
+      var len = bytes('1mb')
+      var buf = Buffer.alloc(len, '.')
+      // specifically set the compression quality to 0
+      var params = {}
+      params[zlib.constants.BROTLI_PARAM_QUALITY] = 0
+      var server = createServer({ threshold: 0, brotli: { params: params } }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end(buf)
+      })
+      request(server).get('/').set('Accept-Encoding', 'br').then(function (res) {
+        var params2 = {}
+        params2[zlib.constants.BROTLI_PARAM_QUALITY] = 4
+
+        // we expect the size of a buffer compressed with quality 4 to be smaller in size than a buffer compressed with quality 0
+        assert.ok(res.text.length > zlib.brotliCompressSync(buf, { params: params2 }).toString().length, 'expected size to be bigger when specifying custom compression quality of 0 instead of the compression default 4')
+        done()
+      }).catch(function (e) { done(e) })
+    })
+  })
+  describe('when options.brotli is undefined', function () {
+    brotlit('should respond with no errors', function (done) {
+      var server = createServer({ threshold: 0 }, function (req, res) {
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('hello, world')
+      })
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'br')
+        .expect('Content-Encoding', 'br', done)
+    })
+  })
+
   describe('when "Cache-Control: no-transform" response header', function () {
     it('should not compress response', function (done) {
       var server = createServer({ threshold: 0 }, function (req, res) {
@@ -656,6 +784,32 @@ describe('compression()', function () {
         }))
         .end()
     })
+
+    brotlit('should flush small chunks for br', function (done) {
+      var chunks = 0
+      var next
+      var server = createServer({ threshold: 0 }, function (req, res) {
+        next = writeAndFlush(res, 2, Buffer.from('..'))
+        res.setHeader('Content-Type', 'text/plain')
+        next()
+      })
+
+      function onchunk (chunk) {
+        assert.ok(chunks++ < 20)
+        assert.strictEqual(chunk.toString(), '..')
+        next()
+      }
+
+      request(server)
+        .get('/')
+        .set('Accept-Encoding', 'br')
+        .request()
+        .on('response', unchunk('br', onchunk, function (err) {
+          if (err) return done(err)
+          server.close(done)
+        }))
+        .end()
+    })
   })
 })
 
@@ -709,6 +863,9 @@ function unchunk (encoding, onchunk, onend) {
         break
       case 'gzip':
         stream = res.pipe(zlib.createGunzip())
+        break
+      case 'br':
+        if (hasBrotliSupport)stream = res.pipe(zlib.createBrotliDecompress())
         break
     }
 

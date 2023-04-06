@@ -11,6 +11,9 @@ The following compression codings are supported:
 
   - deflate
   - gzip
+  - br (requires node v10.16.0 or higher)
+
+**Note** Brotli is supported only since Node.js versions v11.7.0 and v10.16.0.
 
 ## Install
 
@@ -33,6 +36,7 @@ var compression = require('compression')
 Returns the compression middleware using the given `options`. The middleware
 will attempt to compress response bodies for all request that traverse through
 the middleware, based on the given `options`.
+Options for brotli ( ' br ' ) compression should be passed in as `options.brotli`.
 
 This middleware will never compress responses that include a `Cache-Control`
 header with the [`no-transform` directive](https://tools.ietf.org/html/rfc7234#section-5.2.2.4),
@@ -43,6 +47,7 @@ as compressing will transform the body.
 `compression()` accepts these properties in the options object. In addition to
 those listed below, [zlib](http://nodejs.org/api/zlib.html) options may be
 passed in to the options object.
+Options for brotli compression may be passed in under `options.brotli`. 
 
 ##### chunkSize
 
@@ -160,6 +165,37 @@ function shouldCompress (req, res) {
   // fallback to standard filter function
   return compression.filter(req, res)
 }
+```
+#### .brotli
+The object that is passed to `zlib.createBrotliCompress()`.
+`options.brotli` takes a [BrotliOptions](https://nodejs.org/api/zlib.html#class-brotlioptions) object.
+All options are optional.
+##### flush 
+<integer> Default: zlib.constants.BROTLI_OPERATION_PROCESS
+##### finishFlush
+<integer> Default: zlib.constants.BROTLI_OPERATION_FINISH
+##### chunkSize
+<integer> Default: 16 * 1024
+##### params
+<Object> Key-value object containing indexed Brotli parameters. The `params` object is used to specify compression settings using [Brotli constants](https://nodejs.org/api/zlib.html#class-brotlioptions). `compression()` by default only sets `zlib.constants.BROTLI_PARAM_QUALITY` to `4` if a custom value is not already provided in the params.
+##### maxOutputLength
+<integer> Limits output size when using convenience methods. 
+  
+Example of an options object with brotli options:
+```js
+const options = {
+  // gzip / defalte options
+  chunkSize: 16384,
+  level: 3,
+  // brotli options
+  brotli: {
+    chunkSize: 32 * 1024,
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: 4
+    }
+  }
+}
+app.use(compression(options))
 ```
 
 ### res.flush
